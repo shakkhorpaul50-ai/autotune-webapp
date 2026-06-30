@@ -455,43 +455,6 @@ html, body {
     to { transform: rotate(360deg); }
 }
 
-#initOverlay {
-    position: fixed;
-    inset: 0;
-    background: var(--bg-primary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 200;
-}
-
-#initContent {
-    text-align: center;
-}
-
-#initContent p {
-    margin-top: 16px;
-    font-size: 15px;
-    color: var(--text-secondary);
-}
-
-#initProgress {
-    width: 280px;
-    height: 3px;
-    background: var(--bg-elevated);
-    border-radius: 2px;
-    margin-top: 20px;
-    overflow: hidden;
-}
-
-#initProgressFill {
-    height: 100%;
-    width: 0%;
-    background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.3s;
-}
-
 @media (max-width: 768px) {
     #main {
         flex-direction: column;

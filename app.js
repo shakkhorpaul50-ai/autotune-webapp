@@ -1,4 +1,3 @@
-let pyodide = null;
 let audioContext = null;
 let originalBuffer = null;
 let correctedBuffer = null;
@@ -8,8 +7,6 @@ let recording = false;
 let mediaRecorder = null;
 let recordedChunks = [];
 let animFrame = null;
-let processingStart = 0;
-let audioFile = null;
 
 const $ = id => document.getElementById(id);
 const dropZone = $('dropZone');
@@ -31,177 +28,10 @@ const progressBar = $('progressBar');
 const fileInfo = $('fileInfo');
 const overlay = $('overlay');
 const overlayText = $('overlayText');
-const initOverlay = $('initOverlay');
-const initText = $('initText');
-const initProgressFill = $('initProgressFill');
 const statusBadge = $('statusBadge');
 const downloadPanel = $('downloadPanel');
 const downloadBtn = $('downloadBtn');
 const processingTime = $('processingTime');
-
-const PYTHON_CODE = `
-import numpy as np
-
-def autotune(audio, sample_rate, strength=1.0, stretch=1.0):
-    if len(audio) < sample_rate * 0.01:
-        return audio.copy()
-    corrected = _pitch_correct(audio, sample_rate, strength)
-    if abs(stretch - 1.0) > 0.001:
-        corrected = _time_stretch(corrected, stretch)
-    return corrected
-
-def _pitch_correct(audio, sr, strength):
-    frame_ms = 30
-    hop_ms = 10
-    frame_size = int(frame_ms * sr / 1000)
-    hop_size = int(hop_ms * sr / 1000)
-    n = len(audio)
-    if n < frame_size:
-        return audio.copy()
-    n_frames = max(1, (n - frame_size) // hop_size + 1)
-    needed = (n_frames - 1) * hop_size + frame_size
-    if needed > n:
-        audio = np.pad(audio, (0, needed - n))
-    window = np.hanning(frame_size)
-    pitches = np.zeros(n_frames)
-    for i in range(n_frames):
-        start = i * hop_size
-        frame = audio[start:start + frame_size] - np.mean(audio[start:start + frame_size])
-        frame = frame * window
-        pitches[i] = _detect_pitch(frame, sr)
-    targets = np.zeros(n_frames)
-    for i in range(n_frames):
-        if pitches[i] > 0:
-            midi = 12 * np.log2(pitches[i] / 440.0) + 69
-            midi = np.clip(np.round(midi), 0, 127)
-            snapped = 440.0 * (2 ** ((midi - 69) / 12))
-            targets[i] = pitches[i] + strength * (snapped - pitches[i])
-    output = np.zeros(needed + frame_size)
-    for i in range(n_frames):
-        start = i * hop_size
-        frame = audio[start:start + frame_size] * window
-        if pitches[i] > 0 and targets[i] > 0:
-            ratio = pitches[i] / targets[i]
-            ratio = np.clip(ratio, 0.5, 2.0)
-            frame = _resample(frame, ratio) * window
-        output[start:start + frame_size] += frame
-    return output[:n]
-
-def _detect_pitch(frame, sr):
-    n = len(frame)
-    if n < 2:
-        return 0.0
-    corr = np.correlate(frame, frame, mode='full')
-    corr = corr[n - 1:]
-    min_freq = 50.0
-    max_freq = 2000.0
-    min_lag = max(1, int(sr / max_freq))
-    max_lag = min(int(sr / min_freq), n - 1)
-    if min_lag >= max_lag:
-        return 0.0
-    segment = corr[min_lag:max_lag + 1]
-    if len(segment) < 2:
-        return 0.0
-    peak_idx = np.argmax(segment) + min_lag
-    confidence = corr[peak_idx] / (corr[0] + 1e-10)
-    if confidence < 0.2:
-        return 0.0
-    pitch = sr / peak_idx
-    if pitch < min_freq or pitch > max_freq:
-        return 0.0
-    return pitch
-
-def _resample(frame, ratio):
-    n = len(frame)
-    new_n = max(2, int(round(n / ratio)))
-    x_old = np.linspace(0, 1, n)
-    x_new = np.linspace(0, 1, new_n)
-    resampled = np.interp(x_new, x_old, frame)
-    if new_n < n:
-        result = np.pad(resampled, (0, n - new_n), mode='reflect')
-    else:
-        result = resampled[:n]
-    return result
-
-def _time_stretch(audio, stretch):
-    if stretch == 1.0:
-        return audio.copy()
-    n = len(audio)
-    frame_size = 2048
-    analysis_hop = frame_size // 4
-    if n < frame_size:
-        return audio.copy()
-    synthesis_hop = max(1, int(round(analysis_hop * stretch)))
-    n_frames = max(1, (n - frame_size) // analysis_hop + 1)
-    window = np.hanning(frame_size)
-    out_len = int((n_frames - 1) * synthesis_hop + frame_size)
-    output = np.zeros(out_len + frame_size, dtype=np.float64)
-    norm = np.zeros(out_len + frame_size, dtype=np.float64)
-    for i in range(n_frames):
-        ana_pos = i * analysis_hop
-        syn_pos = i * synthesis_hop
-        frame = audio[ana_pos:ana_pos + frame_size].copy()
-        frame = frame * window
-        end = syn_pos + frame_size
-        output[syn_pos:end] += frame
-        norm[syn_pos:end] += window
-    norm = np.where(norm > 0.001, norm, 1.0)
-    output = output / norm
-    target_len = min(int(round(n / stretch)), len(output))
-    return output[:target_len]
-`;
-
-async function withTimeout(promise, label, ms) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error(label + ' timed out after ' + ms + 'ms')), ms);
-    });
-    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-async function init() {
-    initText.textContent = 'Loading Python engine (Pyodide)...';
-    initProgressFill.style.width = '10%';
-
-    try {
-        pyodide = await withTimeout(loadPyodide({
-            indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.29.4/full/'
-        }), 'Pyodide', 60000);
-        initProgressFill.style.width = '40%';
-        initText.textContent = 'Loading NumPy and SciPy...';
-
-        await withTimeout(pyodide.loadPackage(['numpy', 'scipy']), 'NumPy/SciPy', 120000);
-        initProgressFill.style.width = '70%';
-        initText.textContent = 'Loading autotune engine...';
-
-        const ac = new AbortController();
-        const tid = setTimeout(() => ac.abort(), 3000);
-        try {
-            const resp = await fetch('autotune.py', { signal: ac.signal });
-            if (resp.ok) {
-                await pyodide.runPythonAsync(await resp.text());
-            } else {
-                throw new Error();
-            }
-        } catch (_) {
-            await pyodide.runPythonAsync(PYTHON_CODE);
-        } finally {
-            clearTimeout(tid);
-        }
-        initProgressFill.style.width = '100%';
-
-        setTimeout(() => {
-            initOverlay.hidden = true;
-            statusBadge.textContent = 'Ready';
-            statusBadge.className = 'status-badge ready';
-        }, 400);
-    } catch (err) {
-        initText.textContent = 'Failed: ' + err.message;
-        initText.style.color = 'var(--red)';
-        document.getElementById('retryBtn').style.display = '';
-        console.error(err);
-    }
-}
 
 function getAudioContext() {
     if (!audioContext) {
@@ -226,8 +56,7 @@ function formatTime(sec) {
 
 function drawWaveform(buffer, color, offsetY, height, alpha) {
     const data = buffer.getChannelData(0);
-    const w = waveform.width;
-    const h = waveform.height;
+    const w = parseInt(waveform.style.width);
     const step = Math.max(1, Math.floor(data.length / w));
     const mid = offsetY + height / 2;
     const ampScale = height * 0.9;
@@ -239,19 +68,18 @@ function drawWaveform(buffer, color, offsetY, height, alpha) {
 
     for (let x = 0; x < w; x++) {
         const idx = Math.floor(x * step);
-        const sample = data[idx] || 0;
-        const y = mid - sample * ampScale / 2;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        const s = data[idx] || 0;
+        if (x === 0) ctx.moveTo(x, mid - s * ampScale / 2);
+        else ctx.lineTo(x, mid - s * ampScale / 2);
     }
     ctx.stroke();
 
+    ctx.beginPath();
     for (let x = 0; x < w; x++) {
         const idx = Math.floor(x * step);
-        const sample = data[idx] || 0;
-        const y = mid + sample * ampScale / 2;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        const s = data[idx] || 0;
+        if (x === 0) ctx.moveTo(x, mid + s * ampScale / 2);
+        else ctx.lineTo(x, mid + s * ampScale / 2);
     }
     ctx.stroke();
 }
@@ -267,7 +95,6 @@ function renderWaveforms() {
     ctx.clearRect(0, 0, waveform.width, waveform.height);
     ctx.scale(dpr, dpr);
 
-    const w = parseInt(waveform.style.width);
     const h = parseInt(waveform.style.height);
 
     if (originalBuffer) {
@@ -281,15 +108,13 @@ function renderWaveforms() {
 }
 
 function loadFile(file) {
-    audioFile = file;
     fileInfo.textContent = file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
     setStatus('Loaded', 'ready');
 
     const reader = new FileReader();
     reader.onload = async function(e) {
         try {
-            const ctx_ = getAudioContext();
-            const data = await ctx_.decodeAudioData(e.target.result);
+            const data = await getAudioContext().decodeAudioData(e.target.result);
             originalBuffer = data;
             correctedBuffer = null;
             downloadPanel.hidden = true;
@@ -320,8 +145,7 @@ dropZone.addEventListener('dragleave', () => {
 dropZone.addEventListener('drop', (e) => {
     e.preventDefault();
     dropZone.classList.remove('dragover');
-    const files = e.dataTransfer.files;
-    if (files.length > 0) loadFile(files[0]);
+    if (e.dataTransfer.files.length > 0) loadFile(e.dataTransfer.files[0]);
 });
 
 fileInput.addEventListener('change', () => {
@@ -348,9 +172,7 @@ recordBtn.addEventListener('click', async () => {
             recording = false;
             recordBtn.textContent = 'Record';
             recordBtn.classList.remove('active');
-
-            const file = new File([blob], 'recording.webm', { type: 'audio/webm' });
-            loadFile(file);
+            loadFile(new File([blob], 'recording.webm', { type: 'audio/webm' }));
         };
 
         mediaRecorder.start();
@@ -372,45 +194,239 @@ stretchSlider.addEventListener('input', () => {
 
 processBtn.addEventListener('click', processAudio);
 
+// ─── Pure JS Autotune Engine ────────────────────────────────────────────────
+
+function hannWindow(n) {
+    const w = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        w[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (n - 1)));
+    }
+    return w;
+}
+
+function detectPitch(frame, sr) {
+    const n = frame.length;
+    if (n < 4) return 0;
+
+    const mean = frame.reduce((a, b) => a + b, 0) / n;
+    const centered = new Float64Array(n);
+    for (let i = 0; i < n; i++) centered[i] = frame[i] - mean;
+
+    const corr = new Float64Array(n);
+    for (let lag = 0; lag < n; lag++) {
+        let sum = 0;
+        for (let i = 0; i < n - lag; i++) {
+            sum += centered[i] * centered[i + lag];
+        }
+        corr[lag] = sum;
+    }
+
+    const minFreq = 50;
+    const maxFreq = 2000;
+    const minLag = Math.max(1, Math.floor(sr / maxFreq));
+    const maxLag = Math.min(Math.floor(sr / minFreq), n - 1);
+
+    if (minLag >= maxLag) return 0;
+
+    let peakIdx = minLag;
+    let peakVal = corr[minLag];
+    for (let i = minLag + 1; i <= maxLag; i++) {
+        if (corr[i] > peakVal) {
+            peakVal = corr[i];
+            peakIdx = i;
+        }
+    }
+
+    const confidence = peakVal / (corr[0] + 1e-10);
+    if (confidence < 0.2 || peakIdx === 0) return 0;
+
+    const pitch = sr / peakIdx;
+    if (pitch < minFreq || pitch > maxFreq) return 0;
+
+    return pitch;
+}
+
+function snapToChromatic(freq) {
+    if (freq <= 0) return 0;
+    let midi = 12 * Math.log2(freq / 440) + 69;
+    midi = Math.round(Math.max(0, Math.min(127, midi)));
+    return 440 * Math.pow(2, (midi - 69) / 12);
+}
+
+function resampleFrame(frame, ratio) {
+    const n = frame.length;
+    const newN = Math.max(2, Math.round(n / ratio));
+    const result = new Float64Array(n);
+
+    for (let i = 0; i < newN && i < n; i++) {
+        const srcPos = (i / newN) * n;
+        const idx = Math.floor(srcPos);
+        const frac = srcPos - idx;
+        const next = Math.min(idx + 1, n - 1);
+        result[i] = frame[idx] + frac * (frame[next] - frame[idx]);
+    }
+
+    return result;
+}
+
+function overlapAdd(frames, window, hopSize, outLen) {
+    const frameSize = window.length;
+    const output = new Float64Array(outLen);
+
+    for (let i = 0; i < frames.length; i++) {
+        const start = i * hopSize;
+        for (let j = 0; j < frameSize; j++) {
+            if (start + j < outLen) {
+                output[start + j] += frames[i][j] * window[j];
+            }
+        }
+    }
+
+    return output;
+}
+
+function pitchCorrect(audio, sr, strength) {
+    const frameMs = 30;
+    const hopMs = 10;
+    const frameSize = Math.round(frameMs * sr / 1000);
+    const hopSize = Math.round(hopMs * sr / 1000);
+
+    const n = audio.length;
+    if (n < frameSize) return audio;
+
+    const nFrames = Math.max(1, Math.floor((n - frameSize) / hopSize) + 1);
+    const needed = (nFrames - 1) * hopSize + frameSize;
+
+    const window = hannWindow(frameSize);
+    const pitches = new Float64Array(nFrames);
+
+    for (let i = 0; i < nFrames; i++) {
+        const start = i * hopSize;
+        const frame = new Float64Array(frameSize);
+        for (let j = 0; j < frameSize; j++) {
+            frame[j] = audio[Math.min(start + j, n - 1)];
+        }
+        pitches[i] = detectPitch(frame, sr);
+    }
+
+    const targets = new Float64Array(nFrames);
+    for (let i = 0; i < nFrames; i++) {
+        if (pitches[i] > 0) {
+            const snapped = snapToChromatic(pitches[i]);
+            targets[i] = pitches[i] + strength * (snapped - pitches[i]);
+        }
+    }
+
+    const outLen = Math.max(n, needed);
+    const outputFrames = [];
+
+    for (let i = 0; i < nFrames; i++) {
+        const start = i * hopSize;
+        const frame = new Float64Array(frameSize);
+        for (let j = 0; j < frameSize; j++) {
+            frame[j] = audio[Math.min(start + j, n - 1)];
+        }
+
+        if (pitches[i] > 0 && targets[i] > 0) {
+            let ratio = pitches[i] / targets[i];
+            ratio = Math.max(0.5, Math.min(2.0, ratio));
+            const shifted = resampleFrame(frame, ratio);
+            for (let j = 0; j < frameSize; j++) {
+                frame[j] = shifted[j] * window[j];
+            }
+        } else {
+            for (let j = 0; j < frameSize; j++) {
+                frame[j] = frame[j] * window[j];
+            }
+        }
+
+        outputFrames.push(frame);
+    }
+
+    const result = overlapAdd(outputFrames, window, hopSize, outLen + frameSize);
+
+    if (result.length > n) {
+        return result.slice(0, n);
+    }
+    return result;
+}
+
+function timeStretch(audio, stretch) {
+    if (stretch === 1.0) return audio.slice();
+
+    const n = audio.length;
+    const frameSize = 2048;
+    const analysisHop = Math.floor(frameSize / 4);
+
+    if (n < frameSize) return audio.slice();
+
+    const synthesisHop = Math.max(1, Math.round(analysisHop * stretch));
+    const nFrames = Math.max(1, Math.floor((n - frameSize) / analysisHop) + 1);
+    const window = hannWindow(frameSize);
+
+    const outLen = Math.round((nFrames - 1) * synthesisHop + frameSize);
+    const output = new Float64Array(outLen + frameSize);
+    const norm = new Float64Array(outLen + frameSize);
+
+    for (let i = 0; i < nFrames; i++) {
+        const anaPos = i * analysisHop;
+        const synPos = Math.round(i * synthesisHop);
+
+        for (let j = 0; j < frameSize; j++) {
+            const val = audio[Math.min(anaPos + j, n - 1)] * window[j];
+            output[synPos + j] += val;
+            norm[synPos + j] += window[j];
+        }
+    }
+
+    for (let i = 0; i < outLen; i++) {
+        output[i] = output[i] / Math.max(0.001, norm[i]);
+    }
+
+    const targetLen = Math.min(Math.round(n / stretch), outLen);
+    return output.slice(0, targetLen);
+}
+
+function autotune(audio, sr, strength, stretch) {
+    if (audio.length < sr * 0.01) return audio.slice();
+    let result = pitchCorrect(audio, sr, strength);
+    if (Math.abs(stretch - 1.0) > 0.001) {
+        result = timeStretch(result, stretch);
+    }
+    return result;
+}
+
+// ─── Processing ─────────────────────────────────────────────────────────────
+
 async function processAudio() {
-    if (!originalBuffer || !pyodide) return;
+    if (!originalBuffer) return;
 
     stopPlayback();
     overlay.hidden = false;
     overlayText.textContent = 'Processing...';
     setStatus('Processing', 'busy');
     processBtn.disabled = true;
-    processingStart = performance.now();
+    const processingStart = performance.now();
 
     try {
+        await new Promise(resolve => setTimeout(resolve, 50));
+
         const src = originalBuffer.getChannelData(0);
         const sr = originalBuffer.sampleRate;
         const strength = strengthSlider.value / 100;
         const stretch = stretchSlider.value / 100;
 
-        pyodide.globals.set('_aud_src', new Float64Array(src));
-        pyodide.globals.set('_aud_sr', sr);
-        pyodide.globals.set('_aud_str', strength);
-        pyodide.globals.set('_aud_stretch', stretch);
+        const audio = new Float64Array(src.length);
+        for (let i = 0; i < src.length; i++) audio[i] = src[i];
 
-        await pyodide.runPythonAsync(`
-            import numpy as np
-            audio = np.frombuffer(_aud_src, dtype=np.float64)
-            result = autotune(audio, _aud_sr, _aud_str, _aud_stretch)
-            result_list = result.tolist()
-        `);
-
-        const resultList = pyodide.globals.get('result_list');
-        const correctedSamples = new Float32Array(resultList);
-        pyodide.globals.delete('_aud_src');
-        pyodide.globals.delete('_aud_sr');
-        pyodide.globals.delete('_aud_str');
-        pyodide.globals.delete('_aud_stretch');
-        pyodide.globals.delete('result_list');
+        const result = autotune(audio, sr, strength, stretch);
 
         const ctx_ = getAudioContext();
-        correctedBuffer = ctx_.createBuffer(1, correctedSamples.length, originalBuffer.sampleRate);
-        correctedBuffer.getChannelData(0).set(correctedSamples);
+        correctedBuffer = ctx_.createBuffer(1, result.length, sr);
+        const channel = correctedBuffer.getChannelData(0);
+        for (let i = 0; i < result.length; i++) {
+            channel[i] = Math.max(-1, Math.min(1, result[i]));
+        }
 
         const elapsed = ((performance.now() - processingStart) / 1000).toFixed(1);
         processingTime.hidden = false;
@@ -428,6 +444,8 @@ async function processAudio() {
         processBtn.disabled = false;
     }
 }
+
+// ─── Playback ───────────────────────────────────────────────────────────────
 
 function playBuffer(buffer) {
     stopPlayback();
@@ -536,6 +554,8 @@ progressBar.addEventListener('click', (e) => {
     source.onended = () => stopPlayback();
 });
 
+// ─── Download ───────────────────────────────────────────────────────────────
+
 function downloadWAV(buffer, filename) {
     const numChannels = buffer.numberOfChannels;
     const sampleRate = buffer.sampleRate;
@@ -580,6 +600,8 @@ downloadBtn.addEventListener('click', () => {
     if (correctedBuffer) downloadWAV(correctedBuffer, 'autotuned.wav');
 });
 
+// ─── Keyboard ───────────────────────────────────────────────────────────────
+
 document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'INPUT') return;
     switch (e.code) {
@@ -602,9 +624,5 @@ window.addEventListener('resize', () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-    if (document.hidden && isPlaying) {
-        stopPlayback();
-    }
+    if (document.hidden && isPlaying) stopPlayback();
 });
-
-init();
