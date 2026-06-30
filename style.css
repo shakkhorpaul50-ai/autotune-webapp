@@ -431,6 +431,10 @@ html, body {
     backdrop-filter: blur(4px);
 }
 
+#overlay[hidden] {
+    display: none !important;
+}
+
 #overlayContent {
     text-align: center;
     color: var(--text-primary);
