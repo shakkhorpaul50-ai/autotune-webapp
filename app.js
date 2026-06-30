@@ -174,19 +174,20 @@ async function init() {
         initProgressFill.style.width = '70%';
         initText.textContent = 'Loading autotune engine...';
 
-        let code;
+        const ac = new AbortController();
+        const tid = setTimeout(() => ac.abort(), 3000);
         try {
-            const resp = await fetch('autotune.py');
+            const resp = await fetch('autotune.py', { signal: ac.signal });
             if (resp.ok) {
-                code = await resp.text();
+                await pyodide.runPythonAsync(await resp.text());
             } else {
-                throw new Error('fetch status ' + resp.status);
+                throw new Error();
             }
-        } catch (e) {
-            code = PYTHON_CODE;
+        } catch (_) {
+            await pyodide.runPythonAsync(PYTHON_CODE);
+        } finally {
+            clearTimeout(tid);
         }
-
-        await pyodide.runPythonAsync(code);
         initProgressFill.style.width = '100%';
 
         setTimeout(() => {
