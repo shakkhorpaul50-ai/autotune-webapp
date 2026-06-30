@@ -1,0 +1,13 @@
+name = "autotune-webapp"
+type = "web-pages"
+
+[env.production]
+command = ""
+
+[env.preview]
+command = ""
+
+[[redirects]]
+from = "/"
+to = "/index.html"
+status = 200

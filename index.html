@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AutoTune Pro</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+    <header id="header">
+        <div class="logo">
+            <svg viewBox="0 0 32 32" width="28" height="28">
+                <path d="M16 2L4 10v12l12 8 12-8V10L16 2z" fill="none" stroke="currentColor" stroke-width="2"/>
+                <circle cx="16" cy="16" r="3" fill="currentColor"/>
+            </svg>
+            <h1>AutoTune</h1>
+        </div>
+        <div class="status-badge" id="statusBadge">Ready</div>
+    </header>
+
+    <main id="main">
+        <aside id="sidebar">
+            <section class="panel" id="inputPanel">
+                <h2>Input</h2>
+                <div class="drop-zone" id="dropZone">
+                    <svg viewBox="0 0 48 48" width="36" height="36" class="drop-icon">
+                        <path d="M24 6v24M14 16l10-10 10 10M8 34v6a4 4 0 004 4h24a4 4 0 004-4v-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    <p>Drop audio file here<br><span class="sub">or click to browse</span></p>
+                    <input type="file" id="fileInput" accept="audio/*" hidden>
+                </div>
+                <button class="btn recording-btn" id="recordBtn">
+                    <span class="record-dot"></span>
+                    Record
+                </button>
+            </section>
+
+            <section class="panel" id="controlsPanel">
+                <h2>Controls</h2>
+                <div class="control-group">
+                    <label for="strengthSlider">
+                        Autotune Strength
+                        <span class="value" id="strengthValue">100%</span>
+                    </label>
+                    <input type="range" id="strengthSlider" min="0" max="100" value="100" class="slider">
+                </div>
+                <div class="control-group">
+                    <label for="stretchSlider">
+                        Time Stretch
+                        <span class="value" id="stretchValue">100%</span>
+                    </label>
+                    <input type="range" id="stretchSlider" min="50" max="150" value="100" class="slider">
+                </div>
+                <button class="btn primary-btn" id="processBtn" disabled>
+                    <svg viewBox="0 0 24 24" width="18" height="18" class="btn-icon">
+                        <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+                        <path d="M12 8v4l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    Process
+                </button>
+            </section>
+
+            <section class="panel" id="downloadPanel" hidden>
+                <h2>Output</h2>
+                <button class="btn download-btn" id="downloadBtn">
+                    <svg viewBox="0 0 24 24" width="18" height="18" class="btn-icon">
+                        <path d="M12 3v14M5 12l7 7 7-7M4 21h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                    Download WAV
+                </button>
+            </section>
+        </aside>
+
+        <section id="content">
+            <div id="waveformContainer">
+                <div class="wave-label">
+                    <span class="label-original">Original</span>
+                    <span class="label-corrected">Corrected</span>
+                </div>
+                <canvas id="waveform"></canvas>
+                <div id="timeDisplay">
+                    <span id="currentTime">0:00</span>
+                    <span id="duration">0:00</span>
+                </div>
+            </div>
+
+            <div id="transport">
+                <button class="transport-btn" id="playBtn" title="Play / Pause (Space)" disabled>
+                    <svg viewBox="0 0 24 24" width="28" height="28">
+                        <polygon points="6,3 20,12 6,21" fill="currentColor"/>
+                    </svg>
+                </button>
+                <button class="transport-btn" id="stopBtn" title="Stop" disabled>
+                    <svg viewBox="0 0 24 24" width="28" height="28">
+                        <rect x="5" y="5" width="14" height="14" fill="currentColor"/>
+                    </svg>
+                </button>
+                <div id="progressBar">
+                    <div id="progressFill"></div>
+                </div>
+            </div>
+
+            <div id="infoBar">
+                <span id="fileInfo">No file loaded</span>
+                <span id="processingTime" hidden></span>
+            </div>
+        </section>
+    </main>
+
+    <div id="overlay" hidden>
+        <div id="overlayContent">
+            <div class="spinner"></div>
+            <p id="overlayText">Processing...</p>
+        </div>
+    </div>
+</div>
+
+<div id="initOverlay">
+    <div id="initContent">
+        <div class="spinner"></div>
+        <p id="initText">Loading Python engine (Pyodide)...</p>
+        <div id="initProgress"><div id="initProgressFill"></div></div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.29.4/full/pyodide.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
